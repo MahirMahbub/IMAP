@@ -4,7 +4,7 @@ import email
 import imaplib
 import smtplib
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, Tuple, Dict
 
 from pydantic import BaseModel
 
@@ -25,11 +25,11 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def handle(self, request) -> Optional[str]:
+    def handle(self, request_data) -> Optional[str]:
         pass
 
     @abstractmethod
-    def execute(self, request)-> Any:
+    def execute(self, request_data) -> Any:
         pass
 
 
@@ -41,44 +41,44 @@ class AbstractHandler(Handler):
         return handler
 
     @abstractmethod
-    def handle(self, request: Any) -> Any:
+    def handle(self, request_data: Any) -> Any:
         if self._next_handler is not None:
-            response = self._next_handler.handle(request)
+            response = self._next_handler.handle(request_data)
             if response:
                 return self.execute(response)
         else:
-            return self.execute(request)
+            return self.execute(request_data)
 
 
 class ImapHandler(AbstractHandler):
-    def execute(self, request):
-        email_object = EmailData(user_name=request["user_name"],
-                                 password=request["password"],
-                                 imap_ssl_port=request["imap_ssl_port"],
-                                 imap_ssl_host=request["imap_ssl_host"],
-                                 smtp_ssl_port=request["smtp_ssl_port"],
-                                 smtp_ssl_host=request["smtp_ssl_host"])
+    def execute(self, request_data) -> EmailData:
+        email_object: EmailData = EmailData(user_name=request_data["user_name"],
+                                            password=request_data["password"],
+                                            imap_ssl_port=request_data["imap_ssl_port"],
+                                            imap_ssl_host=request_data["imap_ssl_host"],
+                                            smtp_ssl_port=request_data["smtp_ssl_port"],
+                                            smtp_ssl_host=request_data["smtp_ssl_host"])
         return email_object
 
-    def handle(self, request: Any):
-        return super().handle(request)
+    def handle(self, request_data: Any):
+        return super().handle(request_data)
 
 
 class AuthenticationHandler(AbstractHandler):
-    def execute(self, request):
-        imap_server = imaplib.IMAP4_SSL(request.imap_ssl_host, request.imap_ssl_port)
-        imap_server.login(request.user_name, request.password)
-        smtp_server = smtplib.SMTP_SSL(request.smtp_ssl_host, request.smtp_ssl_port)
-        smtp_server.login(request.user_name, request.password)
+    def execute(self, request_data: EmailData) -> Tuple[imaplib.IMAP4_SSL, smtplib.SMTP_SSL]:
+        imap_server: imaplib.IMAP4_SSL = imaplib.IMAP4_SSL(request_data.imap_ssl_host, request_data.imap_ssl_port)
+        imap_server.login(request_data.user_name, request_data.password)
+        smtp_server: smtplib.SMTP_SSL = smtplib.SMTP_SSL(request_data.smtp_ssl_host, request_data.smtp_ssl_port)
+        smtp_server.login(request_data.user_name, request_data.password)
         return imap_server, smtp_server
 
-    def handle(self, request: Any):
-        return super().handle(request)
+    def handle(self, request_data: Any) -> Any:
+        return super().handle(request_data)
 
 
 class GetMessageHandler(AbstractHandler):
-    def execute(self, request):
-        imap_server, smtp_server = request
+    def execute(self, request_data: Tuple[imaplib.IMAP4_SSL, smtplib.SMTP_SSL]) -> None:
+        imap_server, smtp_server = request_data
         self.__select_mail_box(imap_server)
         tmp, data = self.__search_mail_box(imap_server=imap_server, criterion='ALL')
         for num in data[0].split():
@@ -90,39 +90,46 @@ class GetMessageHandler(AbstractHandler):
             self.__print_header(headers)
         self.__close_imap_server(imap_server)
 
-    def __close_imap_server(self, imap_server):
+    @staticmethod
+    def __close_imap_server(imap_server) -> None:
         imap_server.close()
 
-    def __print_header(self, headers):
+    @staticmethod
+    def __print_header(headers) -> None:
         for h in headers.items():
             print(h)
 
-    def __get_header(self, email_message):
+    @staticmethod
+    def __get_header(email_message) -> Dict[Any]:
         parser = email.parser.HeaderParser()
         headers = parser.parsestr(email_message.as_string())
         return headers
 
-    def __decode_message(self, data):
+    @staticmethod
+    def __decode_message(data) -> str:
         message = data[0][1].decode('utf-8')
         return message
 
-    def __fetch_message(self, imap_server, num):
+    @staticmethod
+    def __fetch_message(imap_server, num) -> Tuple[Any, Any]:
         tmp, data = imap_server.fetch(num, '(RFC822)')
         return tmp, data
 
-    def __search_mail_box(self, imap_server, criterion, char_set=None):
+    @staticmethod
+    def __search_mail_box(imap_server, criterion, char_set=None) -> Tuple[Any, Any]:
         tmp, data = imap_server.search(char_set, criterion)
         return tmp, data
 
-    def __select_mail_box(self, imap_server):
+    @staticmethod
+    def __select_mail_box(imap_server) -> None:
         imap_server.select('INBOX')
 
-    def handle(self, request: Any):
-        return super().handle(request)
+    def handle(self, request_data: Any) -> Any:
+        return super().handle(request_data)
 
 
-def client_code(handler: Handler, request) -> None:
-    return handler.handle(request)
+def main(handler: Handler, request_data) -> Any:
+    return handler.handle(request_data)
 
 
 if __name__ == "__main__":
@@ -131,7 +138,7 @@ if __name__ == "__main__":
     msg = GetMessageHandler()
 
     msg.set_prev(auth).set_prev(imap)
-    request = {
+    request_data_ = {
         "user_name": "roboket.test@gmail.com",
         "password": "DDFlkjlkj.78908$%",
         "imap_ssl_port": 993,
@@ -139,33 +146,5 @@ if __name__ == "__main__":
         "smtp_ssl_port": 465,
         "smtp_ssl_host": "smtp.gmail.com",
     }
-    # The client should be able to send a request to any handler, not just the
-    # first one in the chain.
-    print("Chain: Monkey > Squirrel > Dog")
-    print(client_code(msg, request))
 
-# class AuthenticationHandler(AbstractHandler):
-#
-#     def handle(self, request: Any) -> str:
-#         response = super().handle(request)
-#         if response is None:
-#             return self.execute(request)
-#
-#     def execute(self, request):
-#         self.__server = imaplib.IMAP4_SSL(self.__imap_ssl_host, self.__imap_ssl_port)
-#         self.__server.login(self.__user_name, self.__password)
-#         return __server
-
-# class ImapHandler(object):
-#     def __init__(self, email_information: EmailData):
-#         self.__user_name, self.__password = email_information.user_name, email_information.password
-#         self.__imap_ssl_port, self.__imap_ssl_host = email_information.imap_ssl_port, email_information.imap_ssl_host
-#         self.__smtp_ssl_port, self.__smtp_ssl_host = email_information.smtp_ssl_port, email_information.smtp_ssl_host
-#         self.__next_handler = self.__authenticate_imap
-
-# def __authenticate_imap(self):
-#     self.__server = imaplib.IMAP4_SSL(self.__imap_ssl_host, self.__imap_ssl_port)
-#     self.__server.login(self.__user_name, self.__password)
-#     return __server
-
-# def __get_threaded_message(self):
+    print(main(msg, request_data_))
